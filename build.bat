@@ -155,18 +155,22 @@ del msbuild*.log
 
 if %build_hant% == 1 (
   if %build_arm64% == 1 (
-    msbuild.exe weasel.sln %build_option% /p:Configuration=ReleaseHant /p:Platform="ARM64" /fl6
+    msbuild.exe weasel.sln %build_option% /p:Configuration=ReleaseHant /p:Platform="ARM" /fl8
+    if errorlevel 1 goto error
+    msbuild.exe weasel.sln %build_option% /p:Configuration=ReleaseHant /p:Platform="ARM64" /fl7
     if errorlevel 1 goto error
   )
   if %build_x64% == 1 (
-    msbuild.exe weasel.sln %build_option% /p:Configuration=ReleaseHant /p:Platform="x64" /fl5
+    msbuild.exe weasel.sln %build_option% /p:Configuration=ReleaseHant /p:Platform="x64" /fl6
     if errorlevel 1 goto error
   )
-  msbuild.exe weasel.sln %build_option% /p:Configuration=ReleaseHant /p:Platform="Win32" /fl4
+  msbuild.exe weasel.sln %build_option% /p:Configuration=ReleaseHant /p:Platform="Win32" /fl5
   if errorlevel 1 goto error
 )
 
 if %build_arm64% == 1 (
+  msbuild.exe weasel.sln %build_option% /p:Configuration=%build_config% /p:Platform="ARM" /fl4
+  if errorlevel 1 goto error
   msbuild.exe weasel.sln %build_option% /p:Configuration=%build_config% /p:Platform="ARM64" /fl3
   if errorlevel 1 goto error
 )
@@ -214,6 +218,11 @@ set BJAM_OPTIONS_X64=%BJAM_OPTIONS_COMMON%^
  architecture=x86^
  --stagedir=stage_x64
 
+set bjam_options_arm=%BJAM_OPTIONS_COMMON%^
+ define=BOOST_USE_WINAPI_VERSION=0x0A00^
+ architecture=arm^
+ --stagedir=stage_arm 
+
 set bjam_options_arm64=%BJAM_OPTIONS_COMMON%^
  define=BOOST_USE_WINAPI_VERSION=0x0A00^
  architecture=arm^
@@ -227,15 +236,18 @@ if errorlevel 1 goto error
 b2 %BJAM_OPTIONS_X86% stage %BOOST_COMPILED_LIBS%
 if errorlevel 1 goto error
 
-if %build_arm64% == 1 (
-  b2 %bjam_options_arm64% stage %boost_compiled_libs%
-  if errorlevel 1 goto error
-)
-
 if %build_x64% == 1 (
   b2 %BJAM_OPTIONS_X64% stage %BOOST_COMPILED_LIBS%
   if errorlevel 1 goto error
 )
+
+if %build_arm64% == 1 (
+  b2 %bjam_options_arm% stage %boost_compiled_libs%
+  if errorlevel 1 goto error
+  b2 %bjam_options_arm64% stage %boost_compiled_libs%
+  if errorlevel 1 goto error
+)
+
 exit /b
 
 :build_data
@@ -245,7 +257,7 @@ copy %WEASEL_ROOT%\plum\rime-install.bat output\
 set plum_dir=plum
 set rime_dir=output/data
 set WSLENV=plum_dir:rime_dir
-bash plum/rime-install %WEASEL_BUNDLED_RECIPES%
+rem bash plum/rime-install %WEASEL_BUNDLED_RECIPES%
 if errorlevel 1 goto error
 exit /b
 
