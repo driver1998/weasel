@@ -48,6 +48,7 @@ set rime_build_variant=release
 set build_weasel=0
 set build_installer=0
 set build_x64=1
+set build_arm64=1
 
 :parse_cmdline_options
 if "%1" == "" goto end_parsing_cmdline_options
@@ -80,6 +81,7 @@ if "%1" == "all" (
   set build_installer=1
 )
 if "%1" == "nox64" set build_x64=0
+if "%1" == "noarm64" set build_arm64=0
 shift
 goto parse_cmdline_options
 :end_parsing_cmdline_options
@@ -152,14 +154,22 @@ if not exist weasel.props (
 del msbuild*.log
 
 if %build_hant% == 1 (
-  if %build_x64% == 1 (
-    msbuild.exe weasel.sln %build_option% /p:Configuration=ReleaseHant /p:Platform="x64" /fl4
+  if %build_arm64% == 1 (
+    msbuild.exe weasel.sln %build_option% /p:Configuration=ReleaseHant /p:Platform="ARM64" /fl6
     if errorlevel 1 goto error
   )
-  msbuild.exe weasel.sln %build_option% /p:Configuration=ReleaseHant /p:Platform="Win32" /fl3
+  if %build_x64% == 1 (
+    msbuild.exe weasel.sln %build_option% /p:Configuration=ReleaseHant /p:Platform="x64" /fl5
+    if errorlevel 1 goto error
+  )
+  msbuild.exe weasel.sln %build_option% /p:Configuration=ReleaseHant /p:Platform="Win32" /fl4
   if errorlevel 1 goto error
 )
 
+if %build_arm64% == 1 (
+  msbuild.exe weasel.sln %build_option% /p:Configuration=%build_config% /p:Platform="ARM64" /fl3
+  if errorlevel 1 goto error
+)
 if %build_x64% == 1 (
   msbuild.exe weasel.sln %build_option% /p:Configuration=%build_config% /p:Platform="x64" /fl2
   if errorlevel 1 goto error
@@ -195,18 +205,33 @@ set BJAM_OPTIONS_COMMON=toolset=%BJAM_TOOLSET%^
  cxxflags="/Zc:threadSafeInit- "
 
 set BJAM_OPTIONS_X86=%BJAM_OPTIONS_COMMON%^
- define=BOOST_USE_WINAPI_VERSION=0x0501
+ define=BOOST_USE_WINAPI_VERSION=0x0501^
+ architecture=x86
 
 set BJAM_OPTIONS_X64=%BJAM_OPTIONS_COMMON%^
  define=BOOST_USE_WINAPI_VERSION=0x0502^
  address-model=64^
+ architecture=x86^
  --stagedir=stage_x64
+
+set bjam_options_arm64=%BJAM_OPTIONS_COMMON%^
+ define=BOOST_USE_WINAPI_VERSION=0x0A00^
+ architecture=arm^
+ address-model=64^
+ --stagedir=stage_arm64 
 
 cd /d %BOOST_ROOT%
 if not exist b2.exe call bootstrap.bat
 if errorlevel 1 goto error
+
 b2 %BJAM_OPTIONS_X86% stage %BOOST_COMPILED_LIBS%
 if errorlevel 1 goto error
+
+if %build_arm64% == 1 (
+  b2 %bjam_options_arm64% stage %boost_compiled_libs%
+  if errorlevel 1 goto error
+)
+
 if %build_x64% == 1 (
   b2 %BJAM_OPTIONS_X64% stage %BOOST_COMPILED_LIBS%
   if errorlevel 1 goto error
