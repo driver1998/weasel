@@ -65,6 +65,47 @@ BOOL is_wow64()
 		return TRUE;
 }
 
+typedef BOOL(WINAPI* PISWOW64P2)(HANDLE, USHORT*, USHORT*);
+typedef HRESULT(WINAPI* PISWOWGMS)(USHORT, BOOL*);
+BOOL is_arm64_machine()
+{
+	PISWOW64P2 fnIsWow64Process2 = (PISWOW64P2)GetProcAddress(GetModuleHandle(_T("kernel32.dll")), "IsWow64Process2");
+
+	if (fnIsWow64Process2 == NULL)
+	{
+		return FALSE;
+	}
+
+	USHORT processMachine;
+	USHORT nativeMachine;
+
+	// Note: this will break if WeaselSetup is built as x64 or ARM64
+	// Since x64 on ARM64 is not running as a WOW64 process.
+	if (!fnIsWow64Process2(GetCurrentProcess(), &processMachine, &nativeMachine))
+	{
+		return FALSE;
+	}
+	return nativeMachine == IMAGE_FILE_MACHINE_ARM64;
+}
+
+BOOL is_wowarm32_supported()
+{
+	PISWOWGMS fnIsWow64GuestMachineSupported = (PISWOWGMS)GetProcAddress(GetModuleHandle(_T("kernel32.dll")), "IsWow64GuestMachineSupported");
+
+	if (fnIsWow64GuestMachineSupported == NULL)
+	{
+		return FALSE;
+	}
+
+	BOOL supported;
+	if (fnIsWow64GuestMachineSupported(IMAGE_FILE_MACHINE_ARMNT, &supported) != S_OK)
+	{
+		return FALSE;
+	}
+
+	return supported;
+}
+
 typedef BOOL (WINAPI *PW64DW64FR)(PVOID *);
 typedef BOOL (WINAPI *PW64RW64FR)(PVOID);
 typedef int (*ime_register_func)(const std::wstring& ime_path, bool register_ime, bool is_wow64, bool hant, bool silent);
@@ -94,7 +135,6 @@ int install_ime_file(std::wstring& srcPath, const std::wstring& ext, bool hant, 
 	retval += func(destPath, true, false, hant, silent);
 	if (is_wow64())
 	{
-		ireplace_last(srcPath, ext, L"x64" + ext);
 		PVOID OldValue = NULL;
 		PW64DW64FR fnWow64DisableWow64FsRedirection = (PW64DW64FR)GetProcAddress(GetModuleHandle(_T("kernel32.dll")), "Wow64DisableWow64FsRedirection");
 		PW64RW64FR fnWow64RevertWow64FsRedirection = (PW64RW64FR)GetProcAddress(GetModuleHandle(_T("kernel32.dll")), "Wow64RevertWow64FsRedirection");
@@ -103,11 +143,49 @@ int install_ime_file(std::wstring& srcPath, const std::wstring& ext, bool hant, 
 			if (!silent) MessageBoxW(NULL, L"無法取消文件系統重定向", L"安裝失敗", MB_ICONERROR | MB_OK);
 			return 1;
 		}
+
+		if (is_arm64_machine())
+		{
+			// On ARM64 weasel.dll(ime) is an ARM64X redirection DLL (weaselARM64X).
+			// When loaded, it will be redirected to weaselARM64.dll(ime) on ARM64 processes,
+			// and weaselx64.dll(ime) on x64 processes.
+			// So we need a total of three files.
+
+			std::wstring srcPathX64 = srcPath;
+			std::wstring destPathX64 = destPath;
+			ireplace_last(srcPathX64, ext, L"x64" + ext);
+			ireplace_last(destPathX64, ext, L"x64" + ext);
+			if (!copy_file(srcPathX64, destPathX64))
+			{
+				if (!silent) MessageBoxW(NULL, destPathX64.c_str(), L"安裝失敗", MB_ICONERROR | MB_OK);
+				return 1;
+			}
+
+			std::wstring srcPathARM64 = srcPath;
+			std::wstring destPathARM64 = destPath;
+			ireplace_last(srcPathARM64, ext, L"ARM64" + ext);
+			ireplace_last(destPathARM64, ext, L"ARM64" + ext);
+			if (!copy_file(srcPathARM64, destPathARM64))
+			{
+				if (!silent) MessageBoxW(NULL, destPathARM64.c_str(), L"安裝失敗", MB_ICONERROR | MB_OK);
+				return 1;
+			}
+
+			// Since weaselARM64X is just a redirector we don't have separate
+			// HANS and HANT variants.
+			srcPath = std::wstring(drive) + dir + L"weaselARM64X" + ext;
+		}
+		else
+		{
+			ireplace_last(srcPath, ext, L"x64" + ext);
+		}
+
 		if (!copy_file(srcPath, destPath))
 		{
 			if (!silent) MessageBoxW(NULL, destPath.c_str(), L"安裝失敗", MB_ICONERROR | MB_OK);
 			return 1;
 		}
+
 		retval += func(destPath, true, true, hant, silent);
 		if (fnWow64RevertWow64FsRedirection == NULL || fnWow64RevertWow64FsRedirection(OldValue) == FALSE)
 		{
@@ -142,6 +220,26 @@ int uninstall_ime_file(const std::wstring& ext, bool silent, ime_register_func f
 			if (!silent) MessageBoxW(NULL, L"無法取消文件系統重定向", L"卸載失敗", MB_ICONERROR | MB_OK);
 			return 1;
 		}
+
+		if (is_arm64_machine())
+		{
+			std::wstring imePathX64 = imePath;
+			ireplace_last(imePathX64, ext, L"x64" + ext);
+			if (!delete_file(imePathX64))
+			{
+				if (!silent) MessageBoxW(NULL, imePathX64.c_str(), L"卸載失敗", MB_ICONERROR | MB_OK);
+				retval += 1;
+			}
+
+			std::wstring imePathARM64 = imePath;
+			ireplace_last(imePathARM64, ext, L"ARM64" + ext);
+			if (!delete_file(imePathARM64))
+			{
+				if (!silent) MessageBoxW(NULL, imePathARM64.c_str(), L"卸載失敗", MB_ICONERROR | MB_OK);
+				retval += 1;
+			}
+		}
+
 		if (!delete_file(imePath))
 		{
 			if (!silent) MessageBoxW(NULL, imePath.c_str(), L"卸載失敗", MB_ICONERROR | MB_OK);
