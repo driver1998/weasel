@@ -66,7 +66,6 @@ BOOL is_wow64()
 }
 
 typedef BOOL(WINAPI* PISWOW64P2)(HANDLE, USHORT*, USHORT*);
-typedef HRESULT(WINAPI* PISWOWGMS)(USHORT, BOOL*);
 BOOL is_arm64_machine()
 {
 	PISWOW64P2 fnIsWow64Process2 = (PISWOW64P2)GetProcAddress(GetModuleHandle(_T("kernel32.dll")), "IsWow64Process2");
@@ -88,6 +87,7 @@ BOOL is_arm64_machine()
 	return nativeMachine == IMAGE_FILE_MACHINE_ARM64;
 }
 
+typedef HRESULT(WINAPI* PISWOWGMS)(USHORT, BOOL*);
 BOOL is_wowarm32_supported()
 {
 	PISWOWGMS fnIsWow64GuestMachineSupported = (PISWOWGMS)GetProcAddress(GetModuleHandle(_T("kernel32.dll")), "IsWow64GuestMachineSupported");
@@ -106,9 +106,22 @@ BOOL is_wowarm32_supported()
 	return supported;
 }
 
+typedef UINT(WINAPI* PGSW64DIR2)(LPWSTR, UINT, WORD);
+INT get_wow64_system_dir_2(LPWSTR lpBuffer, UINT uSize, WORD ImageFileMachineType)
+{
+	PGSW64DIR2 fnGetSystemWow64Directory2W = (PGSW64DIR2)GetProcAddress(GetModuleHandle(_T("kernelbase.dll")), "GetSystemWow64Directory2W");
+
+	if (fnGetSystemWow64Directory2W == NULL)
+	{
+		return 0;
+	}
+
+	return fnGetSystemWow64Directory2W(lpBuffer, uSize, ImageFileMachineType);
+}
+
 typedef BOOL (WINAPI *PW64DW64FR)(PVOID *);
 typedef BOOL (WINAPI *PW64RW64FR)(PVOID);
-typedef int (*ime_register_func)(const std::wstring& ime_path, bool register_ime, bool is_wow64, bool hant, bool silent);
+typedef int (*ime_register_func)(const std::wstring& ime_path, bool register_ime, bool is_wow64, bool is_wowarm32, bool hant, bool silent);
 
 int install_ime_file(std::wstring& srcPath, const std::wstring& ext, bool hant, bool silent, ime_register_func func)
 {
@@ -132,7 +145,7 @@ int install_ime_file(std::wstring& srcPath, const std::wstring& ext, bool hant, 
 		if (!silent) MessageBoxW(NULL, destPath.c_str(), L"安裝失敗", MB_ICONERROR | MB_OK);
 		return 1;
 	}
-	retval += func(destPath, true, false, hant, silent);
+	retval += func(destPath, true, false, false, hant, silent);
 	if (is_wow64())
 	{
 		PVOID OldValue = NULL;
@@ -146,6 +159,23 @@ int install_ime_file(std::wstring& srcPath, const std::wstring& ext, bool hant, 
 
 		if (is_arm64_machine())
 		{
+			WCHAR sysarm32[MAX_PATH];
+			if (is_wowarm32_supported() &&
+				get_wow64_system_dir_2(sysarm32, _countof(sysarm32), IMAGE_FILE_MACHINE_ARMNT) > 0)
+			{
+				// Install the ARM32 version if ARM32 WOW is supported.
+				std::wstring srcPathARM32 = srcPath;
+				ireplace_last(srcPathARM32, ext, L"ARM" + ext);
+
+				std::wstring destPathARM32 = std::wstring(sysarm32) + L"\\weasel" + ext;
+				if (!copy_file(srcPathARM32, destPathARM32))
+				{
+					if (!silent) MessageBoxW(NULL, destPathARM32.c_str(), L"安裝失敗", MB_ICONERROR | MB_OK);
+					return 1;
+				}
+				retval += func(destPathARM32, true, true, true, hant, silent);
+			}
+
 			// On ARM64 weasel.dll(ime) is an ARM64X redirection DLL (weaselARM64X).
 			// When loaded, it will be redirected to weaselARM64.dll(ime) on ARM64 processes,
 			// and weaselx64.dll(ime) on x64 processes.
@@ -186,7 +216,7 @@ int install_ime_file(std::wstring& srcPath, const std::wstring& ext, bool hant, 
 			return 1;
 		}
 
-		retval += func(destPath, true, true, hant, silent);
+		retval += func(destPath, true, true, false, hant, silent);
 		if (fnWow64RevertWow64FsRedirection == NULL || fnWow64RevertWow64FsRedirection(OldValue) == FALSE)
 		{
 			if (!silent) MessageBoxW(NULL, L"無法恢復文件系統重定向", L"安裝失敗", MB_ICONERROR | MB_OK);
@@ -203,7 +233,7 @@ int uninstall_ime_file(const std::wstring& ext, bool silent, ime_register_func f
 	GetSystemDirectoryW(path, _countof(path));
 	std::wstring imePath(path);
 	imePath += L"\\weasel" + ext;
-	retval += func(imePath, false, false, false, silent);
+	retval += func(imePath, false, false, false, false, silent);
 	if (!delete_file(imePath))
 	{
 		if (!silent) MessageBox(NULL, imePath.c_str(), L"卸載失敗", MB_ICONERROR | MB_OK);
@@ -211,7 +241,7 @@ int uninstall_ime_file(const std::wstring& ext, bool silent, ime_register_func f
 	}
 	if (is_wow64())
 	{
-		retval += func(imePath, false, true, false, silent);
+		retval += func(imePath, false, true, false, false, silent);
 		PVOID OldValue = NULL;
 		PW64DW64FR fnWow64DisableWow64FsRedirection = (PW64DW64FR)GetProcAddress(GetModuleHandle(_T("kernel32.dll")), "Wow64DisableWow64FsRedirection");
 		PW64RW64FR fnWow64RevertWow64FsRedirection = (PW64RW64FR)GetProcAddress(GetModuleHandle(_T("kernel32.dll")), "Wow64RevertWow64FsRedirection");
@@ -223,6 +253,19 @@ int uninstall_ime_file(const std::wstring& ext, bool silent, ime_register_func f
 
 		if (is_arm64_machine())
 		{
+			WCHAR sysarm32[MAX_PATH];
+			if (is_wowarm32_supported() &&
+				get_wow64_system_dir_2(sysarm32, _countof(sysarm32), IMAGE_FILE_MACHINE_ARMNT) > 0)
+			{
+				std::wstring imePathARM32 = std::wstring(sysarm32) + L"\\weasel" + ext;
+				retval += func(imePathARM32, false, true, true, false, silent);
+				if (!delete_file(imePathARM32))
+				{
+					if (!silent) MessageBoxW(NULL, imePathARM32.c_str(), L"卸載失敗", MB_ICONERROR | MB_OK);
+					retval += 1;
+				}
+			}
+
 			std::wstring imePathX64 = imePath;
 			ireplace_last(imePathX64, ext, L"x64" + ext);
 			if (!delete_file(imePathX64))
@@ -255,7 +298,7 @@ int uninstall_ime_file(const std::wstring& ext, bool silent, ime_register_func f
 }
 
 // 注册IME输入法
-int register_ime(const std::wstring& ime_path, bool register_ime, bool is_wow64, bool hant, bool silent)
+int register_ime(const std::wstring& ime_path, bool register_ime, bool is_wow64, bool is_wowarm32, bool hant, bool silent)
 {
 	if (is_wow64)
 	{
@@ -466,7 +509,7 @@ void enable_profile(BOOL fEnable, bool hant) {
 }
 
 // 注册TSF输入法
-int register_text_service(const std::wstring& tsf_path, bool register_ime, bool is_wow64, bool hant, bool silent)
+int register_text_service(const std::wstring& tsf_path, bool register_ime, bool is_wow64, bool is_wowarm32, bool hant, bool silent)
 {
 	using RegisterServerFunction = HRESULT (STDAPICALLTYPE *)();
 
@@ -482,12 +525,21 @@ int register_text_service(const std::wstring& tsf_path, bool register_ime, bool 
 	{
 		params = L" /s " + params;
 	}
+
+	std::wstring app = L"regsvr32.exe";
+	if (is_wowarm32)
+	{
+		WCHAR sysarm32[MAX_PATH];
+		get_wow64_system_dir_2(sysarm32, _countof(sysarm32), IMAGE_FILE_MACHINE_ARMNT);
+		
+		app = std::wstring(sysarm32) + L"\\" + app;
+	}
 	SHELLEXECUTEINFOW shExInfo = { 0 };
 	shExInfo.cbSize = sizeof(shExInfo);
 	shExInfo.fMask = SEE_MASK_NOCLOSEPROCESS;
 	shExInfo.hwnd = 0;
 	shExInfo.lpVerb = L"open";                 // Operation to perform
-	shExInfo.lpFile = L"regsvr32.exe";         // Application to start    
+	shExInfo.lpFile = app.c_str();             // Application to start    
 	shExInfo.lpParameters = params.c_str();    // Additional parameters
 	shExInfo.lpDirectory = 0;
 	shExInfo.nShow = SW_SHOW;
