@@ -269,7 +269,7 @@ copy %WEASEL_ROOT%\plum\rime-install.bat output\
 set plum_dir=plum
 set rime_dir=output/data
 set WSLENV=plum_dir:rime_dir
-rem bash plum/rime-install %WEASEL_BUNDLED_RECIPES%
+bash plum/rime-install %WEASEL_BUNDLED_RECIPES%
 if errorlevel 1 goto error
 exit /b
 
